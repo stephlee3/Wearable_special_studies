@@ -479,6 +479,12 @@ p4 = drnk.wear.data %>%
 grid.arrange(p3,p4,nrow=1)
 ```
 
+The most interesting plot will be the one on the lower left corner. There is a tendency of lower average wearing frequency during the first 2 hours of a day from heavy drinkers to moderate drinkers to non drinkers. 
+
+Such a pattern (or tendency) is shown clearly in the data collected in Fridays, Thursdays and Sundays. This pattern gives us idea that there is non-model-based evidence showing that heavy drinkers tend to wear the device on the first 2 hours of a day (00:00 to 02:00) for a longer time compared with people in other groups.
+
+This result is interesting since on the lower right corner the heavy drinkers do not wear the device more than people in other groups on a whole day. A possible reason is that the drinkers will tend to stay up late and keep wearing the device before they get to bed.
+
 ### Scalar-on-Function Regression Model 
 
 Let $Y_i$ be the binary response that patient $i$ is a heavy drinker. ($Y_i= 0$ for both moderate and non-drinkers). We will fit a functional genaralized linear model (FGLM) as follows.
@@ -595,7 +601,7 @@ data$LW.X <- I(data$X*data$lmat*data$wknd)
 ## fith with no PA predictors
 fit_none <- gam(heavy_drinker ~ Age + SmokeCigs + BMI + Gender, data=data, family=quasibinomial())
 ## model fit ignoring weekend vs weekday
-## note that I'm using cyclic splines because I'm considering the whol day! If you're only considering a subset of 
+## note that I'm using cyclic splines because I'm considering the whole day! If you're only considering a subset of 
 ## the day you may want to change bs="cc" to bs="cr"
 fit_gam <- gam(heavy_drinker ~ Age + SmokeCigs + BMI + Gender +  s(tmat, by=L.X, bs="cr",k=15), data=data, family=quasibinomial(),method="REML")
 # fit_pfr <- pfr(heavy_drinker ~ Age +  lf(X, bs="cc",k=15, integration="riemann"), data=data, family=quasibinomial(),method="REML")
@@ -652,3 +658,44 @@ plot.roc(data_ind$heavy_drinker, data_ind$phat_ind_wknd,
          main = "Model allow for weekend effects \non wearing status")
 
 ```
+
+The most flexible model has slightly higher AUC, which is good.
+
+We create histograms by `ggplot2` to evaluate the performance of fitting:
+
+```{r}
+plot1 <- ggplot(data = data_ind, aes(x = phat_ind_none, fill = as.factor(heavy_drinker))) +
+  geom_histogram(color = "black", bins = 15) +
+  xlim(c(0, 0.3)) +
+  theme_bw() + 
+  scale_fill_discrete(name = "Heavy Drinker", breaks = c("0", "1"), labels = c("No", "Yes")) +
+  labs(x = "P hat for model with no PA predictors")
+
+suppressWarnings(print(plot1))
+```
+
+```{r}
+plot2 <- ggplot(data = data_ind, aes(x = phat_ind, fill = as.factor(heavy_drinker))) +
+  geom_histogram(color = "black", bins = 15) +
+  xlim(c(0,0.3)) +
+  theme_bw() + 
+  scale_fill_discrete(name = "Heavy Drinker", breaks = c("0", "1"), labels = c("No", "Yes")) +
+  labs(x = "P hat for model ignoring weekend and weekday")
+
+suppressWarnings(print(plot2))
+```
+
+```{r}
+plot3 <- ggplot(data = data_ind, aes(x = phat_ind_wknd, fill = as.factor(heavy_drinker))) +
+  geom_histogram(color = "black", bins = 15) +
+  xlim(c(0, 0.3)) +
+  theme_bw() + 
+  scale_fill_discrete(name = "Heavy Drinker", breaks = c("0", "1"), labels = c("No", "Yes")) +
+  labs(x = "P hat for model allowing different affects of PA on weekdays/weekends")
+
+suppressWarnings(print(plot3))
+```
+
+For these models, the blue parts (indicating heavy drinkers) will hold a larger proportion for a given $\hat{p}$ when that $\hat{p}$ is larger.
+
+These plots also indicate that the three models do make some sense on distinguishing heavy drinkers from non-heavy drinkers.
