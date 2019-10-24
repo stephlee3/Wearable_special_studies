@@ -1,0 +1,651 @@
+---
+title: "NHANES Data Presentation"
+author: "Haley Grant, Runzhe Li, Zebin Wang"
+date: "October 23, 2019"
+output:
+  html_document:
+    highlight: tango
+    number_sections: no
+    theme: cosmo
+    code_folding: "hide"
+    toc: yes
+    toc_float: yes
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+
+```{r, message = FALSE,warning=F}
+library(rnhanesdata)
+library(ggplot2)
+library(ggpubr)
+library(dplyr)
+library(tidyr)
+library(tidyverse)
+library(magrittr)
+library(data.table)
+library(mgcv)
+library(refund)
+library(gridExtra)
+
+data("PAXINTEN_C");data("PAXINTEN_D")    ## activity count data matrices
+data("Flags_C");data("Flags_D")          ## wear/non-wear flag data matrices
+data("Covariate_C");data("Covariate_D")  ## demographic/comorbidity data matrices
+
+```
+
+### Data Reliability 
+
+PAXCAL and PAXSTAT are columns that show data reliability for each row. PAXCAL denotes the calibration of the device (1 if calibrated, 2 if not, and 9 if unknown). PAXSTAT denotes the data reliability status (1 if reliable, 2 if not).
+
+```{r summary stats and basics}
+#colnames(PAXINTEN_C)
+
+# View number of inadequate rows
+ggc1 = ggplot(data = PAXINTEN_C, aes(x = PAXCAL))+geom_bar(aes(fill = PAXCAL==1),position = position_dodge(width = 0.8), width=0.5)+
+  labs(title = "PAXCAL: 2003-2004")+
+  scale_fill_discrete(name = NULL,labels = c("Unreliable Data","Reliable Data"))+
+  theme_bw()
+ggc2 = ggplot(data = PAXINTEN_C, aes(x = PAXSTAT))+geom_bar(aes(fill = PAXSTAT==1),position = position_dodge(width = 0.8), width=0.5)+
+  labs(title = "PAXSTAT: 2003-2004")+
+  scale_fill_discrete(name = NULL,labels = c("Unreliable Data","Reliable Data"))+
+  theme_bw()
+ggd1 = ggplot(data = PAXINTEN_D, aes(x = PAXCAL))+geom_bar(aes(fill = PAXCAL==1),position = position_dodge(width = 0.8), width=0.5)+
+  labs(title = "PAXCAL: 2005-2006")+
+  scale_fill_discrete(name = NULL,labels = c("Unreliable Data","Reliable Data"))+
+  theme_bw()
+ggd2 = ggplot(data = PAXINTEN_D, aes(x = PAXSTAT))+geom_bar(aes(fill = PAXSTAT==1),position = position_dodge(width = 0.8), width=0.5)+
+  labs(title = "PAXSTAT: 2005-2006")+
+  scale_fill_discrete(name = NULL, labels = c("Unreliable Data","Reliable Data"))+
+  theme_bw()
+
+ggarrange(ggc1,ggd1,ggc2,ggd2 ,ncol = 2, nrow = 2, common.legend = T, legend = "bottom")
+
+
+
+```
+
+### Average activity counts over time
+
+```{r average_plot}
+PAXINTEN     <- bind_rows(PAXINTEN_C, PAXINTEN_D)
+PAXINTEN_log <- bind_cols(PAXINTEN[, 1:5], log(PAXINTEN[, -c(1:5)] + 1))
+Flags        <- bind_rows(Flags_C, Flags_D)
+
+mean_column <- function(col_name, data) {
+    sapply(1:7, function(i) {
+        tmp <- data %>%
+            filter(WEEKDAY == i) %>%
+            select(starts_with("MIN"))
+        colMeans(tmp, na.rm = TRUE)
+    }) %>%
+        set_colnames(c("Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat")) %>%
+        as_tibble() %>%
+        mutate(minute = 1:n()) %>%
+        gather(key = "day", value = "value", -minute)
+}
+
+bind_rows(
+    mean_column(col_name = "count", data = PAXINTEN)     %>% mutate(key = "count"),
+    mean_column(col_name = "log"  , data = PAXINTEN_log) %>% mutate(key = "log"),
+    mean_column(col_name = "flag" , data = Flags)        %>% mutate(key = "flag")
+) %>%
+    mutate(key = factor(key,
+                        levels = c("count", "log", "flag"),
+                        labels = c("average count",
+                                   "average log count",
+                                   "fraction wearing device"))) %>%
+    ggplot(aes(x = minute, y = value, colour = day)) +
+    geom_line() +
+    facet_grid(key ~ ., scales = "free_y") +
+    theme_bw()
+
+```
+
+### Removing non-wear timepoints 
+```{r cleaned_average_plot}
+PAX       <- bind_rows(PAXINTEN_C, PAXINTEN_D) %>% filter(PAXCAL==1 & PAXSTAT==1)
+Flags_mat <- bind_rows(Flags_C, Flags_D) %>% filter(PAXCAL==1 & PAXSTAT==1)
+PAX_front <- PAX[, 1:5]
+PAX_back  <- PAX[, -c(1:5)]
+rm(PAX)
+
+Flags_mat <- Flags_mat[, -c(1:5)]
+PAX_back[Flags_mat==0] <- NA
+rm(Flags_mat)
+
+PAX_clean <- bind_cols(PAX_front, PAX_back)
+rm(PAX_front, PAX_back)
+
+PAX_clean_log <- bind_cols(PAX_clean[, 1:5], log(PAX_clean[, -c(1:5)] + 1))
+
+
+bind_rows(
+    mean_column(col_name = "count", data = PAX_clean)     %>% mutate(key = "count"),
+    mean_column(col_name = "log"  , data = PAX_clean_log) %>% mutate(key = "log count")
+) %>%
+    ggplot(aes(x = minute, y = value, color = day)) +
+    geom_line() +
+    facet_grid(key ~ ., scales = "free_y") +
+    theme_bw() +
+    labs(y = "average value")
+```
+
+
+```{r plot_individuals, fig.width=10, fig.height=5}
+sum(PAXINTEN_C$PAXCAL != Flags_C$PAXCAL)
+sum(PAXINTEN_C$PAXSTAT != Flags_C$PAXSTAT)
+
+wear <- bind_rows(Flags_C, Flags_D) %>%
+    filter(PAXCAL==1 & PAXSTAT==1) %>%
+    select(-c(PAXCAL, PAXSTAT)) %>%
+    mutate(WEEKDAY = factor(WEEKDAY,
+                            levels = c(2:7, 1),
+                            labels = c("Mon", "Tue", "Wed", "Thu", "Fri",
+                                       "Sat", "Sun")))
+count <- bind_rows(PAXINTEN_C, PAXINTEN_D) %>%
+    filter(PAXCAL==1 & PAXSTAT==1) %>%
+    select(-c(PAXCAL, PAXSTAT)) %>%
+    mutate(WEEKDAY = factor(WEEKDAY,
+                            levels = c(2:7, 1),
+                            labels = c("Mon", "Tue", "Wed", "Thu", "Fri",
+                                       "Sat", "Sun")))
+
+px_wear <- function(w = wear, id) {
+    w %>% 
+        filter(SEQN==id) %>%
+        gather(key = minute, value = wear, -c(SEQN, WEEKDAY, SDDSRVYR)) %>%
+        mutate(minute = substr(minute, 4, nchar(minute)),
+               minute = as.integer(minute))
+}
+
+px_count <- function(c = count, id) {
+    c %>% 
+        filter(SEQN==id) %>%
+        gather(key = minute, value = count, -c(SEQN, WEEKDAY, SDDSRVYR)) %>%
+        mutate(minute = substr(minute, 4, nchar(minute)),
+               minute = as.integer(minute)) %>%
+        group_by(WEEKDAY) %>%
+        mutate(maxdaycount = max(count)) %>%
+        ungroup()
+}
+
+plot_day <- function(w = wear,
+                     c = count,
+                     id = NULL,
+                     seed = NULL) {
+    
+    if (is.null(id)) {
+        ids <- unique(w$SEQN)
+        if (is.null(seed)) { seed <- sample(.Machine$integer.max, 1) }
+        set.seed(seed)
+        id <- sample(ids, 1)
+    }
+    
+    wear <- px_wear(w = w, id = id)
+    count <- px_count(c = c, id = id)
+    
+    wear %>%
+        ggplot(aes(x = minute*24/1440, y = wear)) +
+        geom_area(fill = "red", alpha = .7) +
+        geom_line() +
+        facet_grid(WEEKDAY ~ .) +
+        scale_x_continuous(breaks = seq(0, 24, 3)) +
+        labs(x = "time (hour)", 
+             y = "wear (black/red), normed count (blue)",
+             title = paste0("SEQN = ", id, ", seed =", seed)) +
+        theme_bw() +
+        geom_line(data = count, 
+                  aes(x = minute*24/1440, y = count/maxdaycount),
+                  color = "blue")
+}
+
+plot_hour <- function(w = wear, 
+                      c = count, 
+                      id, 
+                      h) {
+    
+    wear <- px_wear(w = w, id = id)
+    count <- px_count(c = c, id = id) %>% 
+        select(-maxdaycount) %>%
+        left_join(wear %>% select(WEEKDAY, SDDSRVYR, minute, wear),
+                  by = c("WEEKDAY", "SDDSRVYR", "minute")) %>%
+        mutate(count = ifelse(wear==1, count, NA)) %>%
+        select(-wear) %>%
+        filter(floor(minute*24/1440) == h) %>%
+        mutate(minute = 1 + minute - min(minute))
+    
+    p1 <- count %>%
+        ggplot(aes(x = minute, y = count)) +
+        geom_point(color = "blue") +
+        geom_line() +
+        facet_grid(WEEKDAY ~ .) +
+        labs(x = "time (minute)",
+             y = "count",
+             title = paste0("SEQN = ", id, ", hour = ", h, ", scale = raw")) +
+        theme_bw()
+    
+    p2 <- count %>%
+        ggplot(aes(x = minute, y = log(count + 1))) +
+        geom_point(color = "blue") +
+        geom_line() +
+        facet_grid(WEEKDAY ~ .) +
+        labs(x = "time (minute)",
+             y = "log count",
+             title = paste0("SEQN = ", id, ", hour = ", h, ", scale = log")) +
+        theme_bw()
+    
+    gridExtra::grid.arrange(p1, p2, ncol = 2)
+    
+}
+
+
+gridExtra::grid.arrange(
+    plot_day(seed = 15810745),
+    plot_hour(id = 40699, h = 12),
+    ncol = 2
+)
+
+
+```
+
+
+### Drinking Status
+```{r}
+demog = bind_rows(Covariate_C,Covariate_D)%>% filter()
+
+pat.id.del = unique(c(PAXINTEN_C$SEQN[PAXINTEN_C$PAXCAL!=1], PAXINTEN_C$SEQN[PAXINTEN_C$PAXSTAT!=1], PAXINTEN_D$SEQN[PAXINTEN_C$PAXCAL!=1],PAXINTEN_D$SEQN[PAXINTEN_C$PAXSTAT!=1]))
+
+demog = filter(demog, !(SEQN %in% pat.id.del))
+
+hv.drnk = demog$SEQN[which(demog$DrinkStatus=="Heavy Drinker")]
+mod.drnk = demog$SEQN[which(demog$DrinkStatus=="Moderate Drinker")]
+non.drnk = demog$SEQN[which(demog$DrinkStatus=="Non-Drinker")]
+
+children = demog$SEQN[which(demog$RIDAGEYR<18)]
+adult = demog$SEQN[which(demog$RIDAGEYR %in% c(18:65))]
+retired = demog$SEQN[which(demog$RIDAGEYR>65)]
+
+bind_rows(
+    mean_column(col_name = "count", data = PAX_clean%>% filter(SEQN %in% non.drnk))%>% mutate(key = "non drinkers"),
+     mean_column(col_name = "count", data = PAX_clean%>% filter(SEQN %in% mod.drnk))%>% mutate(key = "moderate drinkers"), 
+    mean_column(col_name = "count", data = PAX_clean%>% filter(SEQN %in% hv.drnk))%>% mutate(key = " heavy drinkers")
+) %>%
+    ggplot(aes(x = minute, y = value, color = day)) +
+    geom_line(alpha = 0.6) +
+    facet_grid(key ~ ., scales = "free_y") +
+    theme_bw() +
+    labs(y = "average value")
+
+
+```
+
+
+
+```{r warning=FALSE}
+demog%>% filter(DrinkStatus == "Non-Drinker") %>%
+  ggplot(aes(x = RIDAGEYR, stat(density)))+geom_histogram(bins = 25, color = "black", fill = "lightgrey")+
+  geom_density()+
+  labs(title = "Non-drinker Ages")
+
+summary(demog%>% filter(DrinkStatus == "Non-Drinker") %>%
+  select(RIDAGEYR))
+
+demog%>% filter(DrinkStatus == "Heavy Drinker") %>%
+  select(RIDAGEYR)%>%
+  ggplot(aes(x = RIDAGEYR, stat(density)))+geom_histogram(bins = 25, color = "black", fill = "lightgrey")+
+  geom_density()+
+  labs(title = "Heavy drinker Ages")
+
+summary(demog%>% filter(DrinkStatus == "Heavy Drinker") %>%
+  select(RIDAGEYR))
+
+demog%>% filter(DrinkStatus == "Moderate Drinker") %>%
+  select(RIDAGEYR)%>%
+  ggplot(aes(x = RIDAGEYR, stat(density)))+geom_histogram(bins = 25, color = "black", fill = "lightgrey")+
+  geom_density()+
+  labs(title = "Moderate drinker Ages")
+
+summary(demog%>% filter(DrinkStatus == "Moderate Drinker") %>%
+  select(RIDAGEYR))
+
+
+```
+```{r warning=FALSE}
+bind_rows(
+    mean_column(col_name = "count", data = PAX_clean%>% filter(SEQN %in% intersect(non.drnk, adult) ))%>% mutate(key = "non drinkers"),
+     mean_column(col_name = "count", data = PAX_clean%>% filter(SEQN %in% intersect(mod.drnk, adult)))%>% mutate(key = "moderate drinkers"), 
+    mean_column(col_name = "count", data = PAX_clean%>% filter(SEQN %in% intersect(hv.drnk, adult)))%>% mutate(key = " heavy drinkers")
+) %>%
+    ggplot(aes(x = minute, y = value, color = day)) +
+    geom_line(alpha = 0.6) +
+    facet_grid(key ~ ., scales = "free_y") +
+    theme_bw() +
+    labs(y = "average value", title = "Activity by Drinking Status in Adults Age 18-65")
+
+```
+
+
+
+
+```{r}
+bind_rows(
+    mean_column(col_name = "count", data = Flags%>% filter(SEQN %in% intersect(non.drnk, adult) ))%>% mutate(key = "non drinkers"),
+     mean_column(col_name = "count", data = Flags%>% filter(SEQN %in% intersect(mod.drnk, adult)))%>% mutate(key = "moderate drinkers"), 
+    mean_column(col_name = "count", data = Flags%>% filter(SEQN %in% intersect(hv.drnk, adult)))%>% mutate(key = " heavy drinkers")
+) %>%
+    ggplot(aes(x = minute, y = value, color = day)) +
+    geom_line(alpha = 0.6) +
+    facet_grid(key ~ ., scales = "free_y") +
+    theme_bw() +
+    labs(y = "average value", title = "Non-wear by Drinking Status in Adults Age 18-65")
+
+
+
+bind_rows(
+    mean_column(col_name = "count", data = Flags%>% filter(SEQN %in% intersect(non.drnk, adult) ))%>% mutate(key = "non drinkers"),
+     mean_column(col_name = "count", data = Flags%>% filter(SEQN %in% intersect(mod.drnk, adult)))%>% mutate(key = "moderate drinkers"), 
+    mean_column(col_name = "count", data = Flags%>% filter(SEQN %in% intersect(hv.drnk, adult)))%>% mutate(key = " heavy drinkers")
+) %>%
+    ggplot(aes(x = minute, y = value, color = day)) +
+    xlim(0,120)+
+    ylim(0,0.3)+
+    geom_line(alpha = 0.6) +
+    facet_grid(key ~ ., scales = "free_y") +
+    theme_bw() +
+    labs(y = "average value", title = "Non-wear by Drinking Status in Adults Age 18-65")
+
+
+bind_rows(
+    mean_column(col_name = "count", data = PAX_clean%>% filter(SEQN %in% intersect(non.drnk, adult) ))%>% mutate(key = "non drinkers"),
+     mean_column(col_name = "count", data = PAX_clean%>% filter(SEQN %in% intersect(mod.drnk, adult)))%>% mutate(key = "moderate drinkers"), 
+    mean_column(col_name = "count", data = PAX_clean%>% filter(SEQN %in% intersect(hv.drnk, adult)))%>% mutate(key = " heavy drinkers")
+) %>%
+    ggplot(aes(x = minute, y = value, color = day)) +
+    xlim(0,120)+
+    geom_line(alpha = 0.6) +
+    facet_grid(key ~ ., scales = "free_y") +
+    theme_bw() +
+    labs(y = "average value", title = "Non-wear by Drinking Status in Adults Age 18-65")
+
+
+```
+
+
+```{r}
+# average wear vs non-wear value among heavy-, moderate- and non-drinkers in first 3 hours
+hd = Flags %>%
+  filter(SEQN %in% hv.drnk)%>%
+  select(starts_with("MIN")[1:180]) %>%
+  colMeans(na.rm = T)
+
+nd = Flags %>%
+  filter(SEQN %in% non.drnk)%>%
+  select(starts_with("MIN")[1:180])%>%
+  colMeans(na.rm = T)
+  
+md = Flags %>%
+  filter(SEQN %in% mod.drnk)%>%
+  select(starts_with("MIN")[1:180])%>%
+  colMeans(na.rm = T)
+
+#test if group averages are different (each data point is an average per that minute)
+
+wilcox.test(hd,md, conf.int = T)
+wilcox.test(hd,nd, conf.int = T)
+wilcox.test(md,nd, conf.int = T)
+
+
+## same for activity count
+
+hd_a = PAX_clean %>%
+  filter(SEQN %in% hv.drnk)%>%
+  select(starts_with("MIN")[1:180]) %>%
+  colMeans(na.rm = T)
+
+nd_a = PAX_clean %>%
+  filter(SEQN %in% non.drnk)%>%
+  select(starts_with("MIN")[1:180])%>%
+  colMeans(na.rm = T)
+  
+md_a = PAX_clean %>%
+  filter(SEQN %in% mod.drnk)%>%
+  select(starts_with("MIN")[1:180])%>%
+  colMeans(na.rm = T)
+
+
+wilcox.test(hd_a,md_a, conf.int = T)
+wilcox.test(hd_a,nd_a, conf.int = T)
+wilcox.test(md_a,nd_a, conf.int = T)
+
+```
+
+```{r,warning=F,message=F,fig.width=10, fig.height=5}
+# PA
+drnk.data = bind_rows(
+  mean_column(col_name = "count", data = PAX_clean%>% filter(SEQN %in% non.drnk))%>% mutate(key = "non drinkers"),
+  mean_column(col_name = "count", data = PAX_clean%>% filter(SEQN %in% mod.drnk))%>% mutate(key = "moderate drinkers"), 
+  mean_column(col_name = "count", data = PAX_clean%>% filter(SEQN %in% hv.drnk))%>% mutate(key = " heavy drinkers")
+)
+p1 = drnk.data %>%
+  filter(minute<=120) %>%
+  ggplot(aes(x = day, y = value)) +
+  geom_boxplot(aes(fill = key))+
+  theme_bw()+
+  labs(y = 'average value', title= "Average activity during first 2h \ngroup by drinking status")+
+  theme(legend.position = "bottom",
+        plot.title = element_text(hjust = 0.5))
+
+p2 = drnk.data %>%
+  filter(minute<=1440) %>%
+  ggplot(aes(x = day, y = value)) +
+  geom_boxplot(aes(fill = key))+
+  theme_bw()+
+  labs(y = 'average value', title= "Average activity during the whole day \ngroup by drinking status")+
+  theme(legend.position = "bottom",
+        plot.title = element_text(hjust = 0.5))
+grid.arrange(p1,p2,nrow = 1)
+
+# Wearing 
+drnk.wear.data = bind_rows(
+  mean_column(col_name = "count", data = Flags%>% filter(SEQN %in% intersect(non.drnk, adult) ))%>% mutate(key = "non drinkers"),
+  mean_column(col_name = "count", data = Flags%>% filter(SEQN %in% intersect(mod.drnk, adult)))%>% mutate(key = "moderate drinkers"), 
+  mean_column(col_name = "count", data = Flags%>% filter(SEQN %in% intersect(hv.drnk, adult)))%>% mutate(key = " heavy drinkers")
+) 
+
+p3 = drnk.wear.data %>%
+  filter(minute<=120) %>%
+  ggplot(aes(x = day, y = value)) +
+  geom_boxplot(aes(fill = key))+
+  theme_bw()+
+  labs(y = 'average value', title= "Average wearing status during first 2h \ngroup by drinking status")+
+  theme(legend.position = "bottom",
+        plot.title = element_text(hjust = 0.5))
+
+p4 = drnk.wear.data %>%
+  filter(minute<=1440) %>%
+  ggplot(aes(x = day, y = value)) +
+  geom_boxplot(aes(fill = key))+
+  theme_bw()+
+  labs(y = 'average value', title= "Average wearing status during the whole day \ngroup by drinking status")+
+  theme(legend.position = "bottom",
+        plot.title = element_text(hjust = 0.5))
+grid.arrange(p3,p4,nrow=1)
+```
+
+### Scalar-on-Function Regression Model 
+
+Let $Y_i$ be the binary response that patient $i$ is a heavy drinker. ($Y_i= 0$ for both moderate and non-drinkers). We will fit a functional genaralized linear model (FGLM) as follows.
+
+$$loigt(p(Y_i=1)) = X_i^{\top} \beta + \int_T f_1(t) Z_i(t) dt + I(Day_i \in Weekend) \int_T f_2(t) Z_i(t) dt$$
+
+where $X_i$ includes demographic information: Age, SmokeCigs, BMI, and gender, $Z_i(t)$ is the binary indicator that the patient is wearing the device.  
+```{r,warning=F,message=F}
+rm(list=ls())
+
+## Load data pre-processed in the rnhanesdata package
+## Note the naming convention _* denotes NHANES wave. 
+##      _C = 2003-2004 
+##      _D = 2005-2006
+data("PAXINTEN_C");data("PAXINTEN_D")    ## activity count data matrices
+data("Flags_C");data("Flags_D")          ## wear/non-wear flag data matrices
+data("Covariate_C");data("Covariate_D")  ## demographic/comorbidity data matrices
+
+
+###########################################################################
+##                                                                       ##
+##  Prep accelerometry data for analysis and merge all data  ##
+##                                                                       ##
+###########################################################################
+
+## Re-code activity counts which are considered "non-wear" to be 0.
+## This doesn't impact much data, most estimated non-wear times correspond to 0 counts anyway
+PAXINTEN_C[,paste0("MIN",1:1440)] <- PAXINTEN_C[,paste0("MIN",1:1440)]*Flags_C[,paste0("MIN",1:1440)]
+PAXINTEN_D[,paste0("MIN",1:1440)] <- PAXINTEN_D[,paste0("MIN",1:1440)]*Flags_D[,paste0("MIN",1:1440)]
+
+
+## Merge accelerometry (activity counts + wear/non-wear flags) and covariate data.
+## We will drop the flag information shortly, but we first use it to identify "good" days of data based on
+## estimated wear time
+data_C <- 
+  PAXINTEN_C %>% 
+  ## note that both PAXINTEN_* and Covariate_* have a column
+  ## called "SDDSRVYR" indicating which NHANES wave the data is associated with.
+  left_join(Covariate_C, by=c("SEQN","SDDSRVYR")) %>% 
+  ## Similarly, the activity count (PAXINTEN_*) and wear/non-wear flag matrices (Flags_*) share 
+  ## SEQN, PAXCAL, PAXSTAT, WEEKDAY, SDDSRVR variables.
+  ## In addition, when we join activity and flag data we have duplicated column names.
+  ## Supply meaningful suffixes so we can differentiate them
+  left_join(Flags_C, by=c("SEQN","PAXCAL","PAXSTAT","WEEKDAY","SDDSRVYR"), suffix=c(".AC",".Flag"))
+data_D <- 
+  PAXINTEN_D %>% 
+  left_join(Covariate_D, by=c("SEQN","SDDSRVYR")) %>% 
+  left_join(Flags_D, by=c("SEQN","PAXCAL","PAXSTAT","WEEKDAY","SDDSRVYR"), suffix=c(".AC",".Flag"))
+
+## Combine 2003-2004 and 2005-2006 data into a single data frame
+data <- bind_rows(data_C, data_D)
+
+## Estimate total daily wear time and determine whether a day is "good" based on
+## >= 10 hours (600 minutes) of wear time + device calibration/quality flags.
+## Calculate number of good days per participant (this will be used as an exclusion criteria later -- the standard is >= 3 days),
+data <- 
+  data %>% 
+  mutate("wear_time" = rowSums(select(., one_of(paste0("MIN",1:1440,".Flag"))), na.rm=TRUE),
+         "good_day"  = as.numeric(wear_time >= 600),
+         "good_day"  = good_day * (PAXCAL %in% 1) * (PAXSTAT %in% 1),
+         "Age" = RIDAGEEX/12,
+         "Weekend" = as.numeric(WEEKDAY %in% c(1,7)),
+         "heavy_drinker" = as.numeric(DrinkStatus == "Heavy Drinker")
+  ) %>% 
+  group_by(SEQN) %>% 
+  ## sum up the number of good days
+  ## and caluclate a lagged "good" day (i.e. did they wear the device the preceeding day)
+  mutate("n_good_days" = sum(good_day),
+         "good_day_lag" = c(NA,good_day[-n()])) %>% 
+  ungroup() %>% 
+  ## only consider "good" days and subjects with at least 3 days of good data who were 
+  ## > 21 years old at the interview and < 65 when they wore the accelerometer
+  ## and are not missing alcohol consumption data or other predictors of interest
+  filter(good_day==1 & n_good_days > 3 & RIDAGEYR >= 21 & Age <= 65 & 
+           !is.na(DrinkStatus) & !is.na(SmokeCigs) & !is.na(BMI) & !is.na(Gender)) 
+
+## clean up the workspace (free up RAM)
+rm(list=c("data_C","data_D",
+          "PAXINTEN_C","PAXINTEN_D",
+          "Flags_C","Flags_D",
+          "Covariate_C","Covariate_D"))
+
+
+N       <- nrow(data)        # number of subject-days in the data
+col_inx <- 1:120             # minutes of interest: first two hour: 1~120
+nt      <- length(col_inx)   # number of mintues total in the model
+
+## The logic for the pfr fit
+## recall the basic flr is 
+## g(E[Y]) = \beta_0 + \int f(t)Z(t)dt
+##         ~= \beta_0 + \sum_l \delta_l  f(l) Z(l)     - numeric integration
+##         =  \beta_0 + \sum_l [\delta_l Z(l)] f(l) 
+## Which we can model using gam via a linear functional term (see ?linear.functional.terms)
+## by creating a matrix corresponding the the elementwise product of a numeric integration matrix 
+## by the functional predictor
+
+
+## store functional predictor data as a matrix within the data frame
+## use the wear/non-wear flags instead of the activity counts
+#data$X <- I(log(1+as.matrix(select(data, paste0("MIN",col_inx,".AC")))))
+data$X <- I(as.matrix(select(data, paste0("MIN",col_inx,".Flag"))))
+## matrix of time indices
+tind      <- seq(0,1,len=nt)
+data$tmat <- I(matrix(tind, ncol=nt, nrow=N,byrow=TRUE))
+## Riemann integration matrix
+data$lmat <- I(matrix(1/nt,ncol=nt, nrow=N))
+## matrix of weekend indicators
+data$wknd <- I(matrix(rep(data$Weekend, each=nt), ncol=nt, nrow=N))
+## integration matrix multiplied by the functional predictor
+data$L.X  <- I(data$X*data$lmat)
+## integration matrix multiplied by the functional predictor by the weekend indicator
+data$LW.X <- I(data$X*data$lmat*data$wknd)
+
+## fith with no PA predictors
+fit_none <- gam(heavy_drinker ~ Age + SmokeCigs + BMI + Gender, data=data, family=quasibinomial())
+## model fit ignoring weekend vs weekday
+## note that I'm using cyclic splines because I'm considering the whol day! If you're only considering a subset of 
+## the day you may want to change bs="cc" to bs="cr"
+fit_gam <- gam(heavy_drinker ~ Age + SmokeCigs + BMI + Gender +  s(tmat, by=L.X, bs="cr",k=15), data=data, family=quasibinomial(),method="REML")
+# fit_pfr <- pfr(heavy_drinker ~ Age +  lf(X, bs="cc",k=15, integration="riemann"), data=data, family=quasibinomial(),method="REML")
+## identical fits!
+
+## model fit allowing for affect to differ by PA on weekend
+fit_gam_wknd <- gam(heavy_drinker ~ Age + SmokeCigs + BMI + Gender +   
+                      s(tmat, by=L.X, bs="cr",k=15) + 
+                      s(tmat, by=LW.X, bs="cr",k=15), data=data, family=quasibinomial(),method="REML")
+
+## plot the fits
+#par(mfrow=c(2,2))
+#plot(fit_gam); plot.new()
+#plot(fit_gam_wknd)
+
+## get individual estimated probabilities
+data$phat_day_none     <- predict(fit_none, newdata=data, type='response')
+data$phat_day      <- predict(fit_gam, newdata=data, type='response')
+data$phat_day_wknd <- predict(fit_gam_wknd, newdata=data, type='response')
+## average across days
+data_ind <- 
+  data %>% 
+  select(SEQN, heavy_drinker, phat_day_none, phat_day, phat_day_wknd) %>% 
+  group_by(SEQN) %>% 
+  dplyr::mutate(phat_ind_none = mean(phat_day_none),
+                phat_ind = mean(phat_day),
+                phat_ind_wknd = mean(phat_day_wknd)) %>% 
+  slice(1) %>% 
+  ungroup() %>% 
+  select(-phat_day_none, -phat_day, -phat_day_wknd)
+
+## calculate AUC using the pROC package
+library(pROC)
+roc(data_ind$heavy_drinker, data_ind$phat_ind_none)
+roc(data_ind$heavy_drinker, data_ind$phat_ind)
+roc(data_ind$heavy_drinker, data_ind$phat_ind_wknd) 
+
+
+par(mfrow=c(2,2))
+
+plot.roc(data_ind$heavy_drinker, data_ind$phat_ind_none,          
+         percent = TRUE,                   
+         print.auc=TRUE,
+         main = "Model without wearing status")
+
+plot.roc(data_ind$heavy_drinker, data_ind$phat_ind,         
+         percent = TRUE,                   
+         print.auc=TRUE,
+         main = "Model including wearing status")
+
+plot.roc(data_ind$heavy_drinker, data_ind$phat_ind_wknd,          
+         percent = TRUE,                   
+         print.auc=TRUE,
+         main = "Model allow for weekend effects \non wearing status")
+
+```
