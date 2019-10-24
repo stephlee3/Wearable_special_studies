@@ -489,9 +489,13 @@ This result is interesting since on the lower right corner the heavy drinkers do
 
 Let $Y_i$ be the binary response that patient $i$ is a heavy drinker. ($Y_i= 0$ for both moderate and non-drinkers). We will fit a functional genaralized linear model (FGLM) as follows.
 
-$$loigt(p(Y_i=1)) = X_i^{\top} \beta + \int_T f_1(t) Z_i(t) dt + I(Day_i \in Weekend) \int_T f_2(t) Z_i(t) dt$$
+$$logit(p(Y_i=1)) = X_i^{\top} \beta + \int_T f_1(t) Z_i(t) dt + I(Day_i \in Weekend) \int_T f_2(t) Z_i(t) dt$$
 
-where $X_i$ includes demographic information: Age, SmokeCigs, BMI, and gender, $Z_i(t)$ is the binary indicator that the patient is wearing the device.  
+where $X_i$ includes demographic information: Age, SmokeCigs, BMI, and gender, $Z_i(t)$ is the binary indicator that the patient is wearing the device. Specifically, we only consider "good" days and subjects with at least 3 days of good data whose age is from 21 to 65, and exclude the missing alcohol consumption status. We will use `gam` function in `mgcv` package. 
+
+
+
+
 ```{r,warning=F,message=F}
 rm(list=ls())
 
@@ -598,7 +602,7 @@ data$L.X  <- I(data$X*data$lmat)
 ## integration matrix multiplied by the functional predictor by the weekend indicator
 data$LW.X <- I(data$X*data$lmat*data$wknd)
 
-## fith with no PA predictors
+## fith with no wearing status predictors
 fit_none <- gam(heavy_drinker ~ Age + SmokeCigs + BMI + Gender, data=data, family=quasibinomial())
 ## model fit ignoring weekend vs weekday
 ## note that I'm using cyclic splines because I'm considering the whole day! If you're only considering a subset of 
@@ -658,6 +662,7 @@ plot.roc(data_ind$heavy_drinker, data_ind$phat_ind_wknd,
          main = "Model allow for weekend effects \non wearing status")
 
 ```
+
 
 The most flexible model has slightly higher AUC, which is good.
 
