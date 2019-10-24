@@ -369,7 +369,7 @@ bind_rows(
     geom_line(alpha = 0.6) +
     facet_grid(key ~ ., scales = "free_y") +
     theme_bw() +
-    labs(y = "average value", title = "Non-wear by Drinking Status in Adults Age 18-65")
+    labs(y = "average value", title = "Activity by Drinking Status in Adults Age 18-65")
 
 
 ```
