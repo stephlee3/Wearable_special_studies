@@ -430,12 +430,13 @@ drnk.data = bind_rows(
   mean_column(col_name = "count", data = PAX_clean%>% filter(SEQN %in% mod.drnk))%>% mutate(key = "moderate drinkers"), 
   mean_column(col_name = "count", data = PAX_clean%>% filter(SEQN %in% hv.drnk))%>% mutate(key = " heavy drinkers")
 )
+drnk.data$day = factor(drnk.data$day,levels = c("Mon","Tue","Wed","Thu","Fri","Sat","Sun"))
 p1 = drnk.data %>%
   filter(minute<=120) %>%
   ggplot(aes(x = day, y = value)) +
   geom_boxplot(aes(fill = key))+
   theme_bw()+
-  labs(y = 'average value', title= "Average activity during first 2h \ngroup by drinking status")+
+  labs(y = 'average value', title= "Average activity counts during first 2h \ngroup by drinking status")+
   theme(legend.position = "bottom",
         plot.title = element_text(hjust = 0.5))
 
@@ -444,7 +445,7 @@ p2 = drnk.data %>%
   ggplot(aes(x = day, y = value)) +
   geom_boxplot(aes(fill = key))+
   theme_bw()+
-  labs(y = 'average value', title= "Average activity during the whole day \ngroup by drinking status")+
+  labs(y = 'average value', title= "Average activity counts during the whole day \ngroup by drinking status")+
   theme(legend.position = "bottom",
         plot.title = element_text(hjust = 0.5))
 grid.arrange(p1,p2,nrow = 1)
@@ -455,6 +456,8 @@ drnk.wear.data = bind_rows(
   mean_column(col_name = "count", data = Flags%>% filter(SEQN %in% intersect(mod.drnk, adult)))%>% mutate(key = "moderate drinkers"), 
   mean_column(col_name = "count", data = Flags%>% filter(SEQN %in% intersect(hv.drnk, adult)))%>% mutate(key = " heavy drinkers")
 ) 
+
+drnk.wear.data$day = factor(drnk.wear.data$day,levels = c("Mon","Tue","Wed","Thu","Fri","Sat","Sun"))
 
 p3 = drnk.wear.data %>%
   filter(minute<=120) %>%
